@@ -1,0 +1,399 @@
+{
+  "name": "AI Organizational Summary Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "org-summary",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "org-summary-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract user message and sender info from webhook\nconst body = $input.first().json.body;\nconst userMessage = body.message || body.text || '';\nconst userId = body.user_id || body.from || 'unknown';\nconst platform = body.platform || 'unknown';\n\n// Parse the request to understand what data to fetch\nconst requestAnalysis = {\n  userMessage: userMessage.toLowerCase(),\n  userId: userId,\n  platform: platform,\n  timeRange: 'yesterday', // default\n  includeNotions: true,\n  includeSlack: true,\n  includeEmail: true,\n  includeTodos: true\n};\n\n// Determine time range from message\nif (userMessage.includes('today')) {\n  requestAnalysis.timeRange = 'today';\n} else if (userMessage.includes('this week')) {\n  requestAnalysis.timeRange = 'week';\n} else if (userMessage.includes('last week')) {\n  requestAnalysis.timeRange = 'last_week';\n}\n\n// Determine what to include\nif (userMessage.includes('notion only')) {\n  requestAnalysis.includeSlack = false;\n  requestAnalysis.includeEmail = false;\n} else if (userMessage.includes('slack only')) {\n  requestAnalysis.includeNotions = false;\n  requestAnalysis.includeEmail = false;\n} else if (userMessage.includes('email only')) {\n  requestAnalysis.includeNotions = false;\n  requestAnalysis.includeSlack = false;\n}\n\nreturn { requestAnalysis };"
+      },
+      "id": "parse-request",
+      "name": "Parse Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "notion-condition",
+              "leftValue": "={{ $json.requestAnalysis.includeNotions }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "should-fetch-notion",
+      "name": "Should Fetch Notion?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 180]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "={{ $vars.NOTION_DATABASE_ID }}",
+        "returnAll": false,
+        "limit": 50,
+        "options": {
+          "filter": {
+            "filters": [
+              {
+                "property": "Created",
+                "type": "date",
+                "condition": "on_or_after",
+                "date": "={{ $now.minus({days: 1}).toISO() }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "fetch-notion-pages",
+      "name": "Fetch Notion Pages",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [900, 120]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "slack-condition",
+              "leftValue": "={{ $('Parse Request').item.json.requestAnalysis.includeSlack }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "should-fetch-slack",
+      "name": "Should Fetch Slack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "channelId": "={{ $vars.SLACK_CHANNEL_ID }}",
+        "returnAll": false,
+        "limit": 100,
+        "filters": {
+          "oldest": "={{ $now.minus({days: 1}).toUnixInteger() }}"
+        }
+      },
+      "id": "fetch-slack-messages",
+      "name": "Fetch Slack Messages",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [900, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "email-condition",
+              "leftValue": "={{ $('Parse Request').item.json.requestAnalysis.includeEmail }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "should-fetch-email",
+      "name": "Should Fetch Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 420]
+    },
+    {
+      "parameters": {
+        "protocol": "imap",
+        "server": "imap.gmail.com",
+        "port": 993,
+        "secure": true,
+        "email": "={{ $vars.EMAIL_ADDRESS }}",
+        "password": "={{ $vars.EMAIL_PASSWORD }}",
+        "format": "simple",
+        "readStatus": "unread",
+        "limit": 20
+      },
+      "id": "fetch-emails",
+      "name": "Fetch Recent Emails",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [900, 360]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "allData",
+        "options": {}
+      },
+      "id": "merge-all-data",
+      "name": "Merge All Data",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare data for AI analysis\nconst allData = $input.first().json.allData || [];\nconst requestAnalysis = $('Parse Request').first().json.requestAnalysis;\n\n// Organize data by source\nlet notionData = [];\nlet slackData = [];\nlet emailData = [];\n\nallData.forEach(item => {\n  if (item.url && item.url.includes('notion')) {\n    notionData.push({\n      title: item.properties?.Name?.title?.[0]?.plain_text || 'Untitled',\n      created: item.created_time,\n      url: item.url\n    });\n  } else if (item.ts && item.text) {\n    slackData.push({\n      user: item.user,\n      text: item.text,\n      timestamp: item.ts,\n      channel: item.channel\n    });\n  } else if (item.subject && item.from) {\n    emailData.push({\n      subject: item.subject,\n      from: item.from.value?.[0]?.address || item.from,\n      date: item.date,\n      snippet: item.textPlain?.substring(0, 200) || ''\n    });\n  }\n});\n\n// Create summary prompt for AI\nconst aiPrompt = `\nPlease analyze the following organizational data and provide a personalized summary for user ${requestAnalysis.userId}.\n\nTime Range: ${requestAnalysis.timeRange}\nUser Request: \"${requestAnalysis.userMessage}\"\n\nDATA SOURCES:\n\n=== NOTION PAGES (${notionData.length} items) ===\n${notionData.map(item => `- ${item.title} (Created: ${item.created})`).join('\\n')}\n\n=== SLACK MESSAGES (${slackData.length} items) ===\n${slackData.map(item => `- @${item.user}: ${item.text.substring(0, 100)}...`).join('\\n')}\n\n=== EMAILS (${emailData.length} items) ===\n${emailData.map(item => `- From ${item.from}: ${item.subject} | ${item.snippet}`).join('\\n')}\n\nPlease provide:\n1. Executive Summary (2-3 sentences)\n2. Key Updates by Source\n3. Action Items/TODOs for the user\n4. Important Mentions or Assignments\n5. Upcoming Deadlines or Events\n\nKeep the response concise but informative, suitable for a busy professional.\n`;\n\nreturn {\n  aiPrompt,\n  dataCount: {\n    notion: notionData.length,\n    slack: slackData.length,\n    email: emailData.length\n  },\n  requestAnalysis\n};"
+      },
+      "id": "prepare-ai-prompt",
+      "name": "Prepare AI Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "messages": {
+          "messageValues": [
+            {
+              "role": "system",
+              "content": "You are an executive assistant AI that helps busy professionals stay informed about their organization. Provide clear, actionable summaries."
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.aiPrompt }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 1000
+        }
+      },
+      "id": "ai-analysis",
+      "name": "AI Analysis",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format the response for the platform\nconst aiResponse = $input.first().json.choices[0].message.content;\nconst requestAnalysis = $('Prepare AI Prompt').first().json.requestAnalysis;\nconst dataCount = $('Prepare AI Prompt').first().json.dataCount;\n\n// Add metadata footer\nconst responseWithMeta = `${aiResponse}\n\n---\n📊 Data Sources: ${dataCount.notion} Notion | ${dataCount.slack} Slack | ${dataCount.email} Email\n⏰ Generated: ${new Date().toLocaleString()}\n🤖 AI Organizational Summary Bot`;\n\nreturn {\n  response: responseWithMeta,\n  platform: requestAnalysis.platform,\n  userId: requestAnalysis.userId\n};"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.response }}",
+        "options": {}
+      },
+      "id": "webhook-response",
+      "name": "Send Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2000, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Request": {
+      "main": [
+        [
+          {
+            "node": "Should Fetch Notion?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Should Fetch Slack?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Should Fetch Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Fetch Notion?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Notion Pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Fetch Slack?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Slack Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Fetch Email?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Recent Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Notion Pages": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Slack Messages": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Recent Emails": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge All Data": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Analysis": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-01-26T00:00:00.000Z",
+  "versionId": "1"
+}
